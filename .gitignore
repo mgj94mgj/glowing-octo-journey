@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.vscode/
+*.avi
+*.mp4
+work/
+cpp/build/
+cpp/out/
+
+runtime_logs/

@@ -1,0 +1,140 @@
+global:
+  state: 'B'  # 队伍颜色 R/B
+  camera_mode: 'hik'  # 'test':测试模式,'hik':海康相机,'video':USB相机（videocapture）
+  # 多车同时识别：true=本帧所有车 ROI 拼接批量装甲板识别；false=仅对置信度最高的一辆车走装甲板与滤波
+  multi_car_recognition: true
+  use_serial: True  # 串口启用开关  保证了无串口时能正常调试，虽然没什么影响（有try）
+  save_img: False  # 是否保存图像
+  map_size: [2800, 1500]  # 战场地图尺寸
+
+  test:
+    video_path: '瑞士轮第三场A.avi'  # 测试视频（如果没有留空即可，可自动回退到静态图片测试）
+    loop: True  # 是否循环播放
+    start_frame: 0  # 起始帧号
+    playback_speed: 3.0  # 播放速度（1.0=正常速度）
+
+# 相机原始画面内录。程序启动后直接写入U盘；一次运行只生成一个MP4，结束程序时FFmpeg自动收尾。
+video_recording:
+  enabled: true
+  output_dir: '/media/ajian/AJian/radar_recordings'
+  fps: 30.0
+  crf: 23                 # H.264质量：数值越小越清晰、文件越大
+  preset: 'ultrafast'     # 低CPU占用；若算力充足可改为veryfast，文件会更小
+  threads: 2              # FFmpeg最多使用的CPU编码线程数，避免抢占识别
+  queue_size: 20          # 最多缓存20帧；写盘跟不上时丢录像帧而不影响识别
+
+serial: # 串口
+  port: '/dev/referee'
+  baudrate: 115200
+  timeout: 1
+
+# 云台独立串口帧：A5 A5 + 反制无人机累计次数(uint8) + CRC16(uint16小端) + FE。
+# 累计次数仅在裁判系统 0x020C 的 bit13 从 0 变为 1 时增加一次；程序启动时从 0 开始。
+gimbal:
+  enabled: true
+  port: '/dev/gimbal'
+  baudrate: 115200
+  timeout: 0.01
+  min_interval_s: 0.02      # 最快 50Hz，持续发送当前累计次数
+  debug: false
+
+# 信息波坐标只在收到后的该时长内覆盖敌方视觉位置；超时后自动回退至相机识别。
+radio:
+  info_wave_timeout_s: 1.0
+
+filter:
+  type: "sliding_window"  # 可选值：sliding_window/hybrid_gated_kalman(hybrid)
+  sliding_window:
+    window_size: 5  # 滑动窗口大小
+    max_inactive_time: 2.0 # 滤波器最大不活跃时间(秒)
+    threshold: 100000.0
+  hybrid_gated_kalman:
+    prefilter_window: 3  # 预滤波窗口，建议3-4
+    prefilter_mode: 'median'  # median/mean
+    max_inactive_time: 2.0
+    raw_jump_threshold: 120.0  # 原始观测跳变门限（像素）
+    pred_jump_threshold: 100.0  # 相对预测跳变门限（像素）
+    process_noise: 1e-5
+    measurement_noise: 1e-1
+
+filter_compare:
+  enabled: false  # true时启用影子对比滤波，不参与串口发送,仅用于调试展示
+  compare_type: 'hybrid_gated_kalman'  # auto/sliding_window/hybrid_gated_kalman
+  draw_on_map: true
+  show_delta_text: true
+
+paths:
+  # test_img: 'images/test1.jpg' # 测试图片
+  test_img: 'images/test.jpg' # 测试图片 (需要放入实际测试图片，这里并没有准备)
+  calibration:
+    red: 'arrays_test_red.npy' # 加载标定好的仿射变换矩阵
+    blue: 'arrays_test_blue.npy'
+  map_images:
+    red: 'images-2026/red.jpg'  # 加载红方视角地图
+    blue: 'images-2026/blue.jpg'
+    mask: 'images-2026/map_mask26.jpg' # 加载落点判断掩码
+    backup: 'images-2026/image_2026.jpg'
+  models:
+    car: 'models/carbest_s_120.engine'
+    armor: 'models/armor_v8.engine'
+    uav: 'models/uav_best.engine'
+    car_confidence: 0.6
+    armor_confidence: 0.6
+    uav_confidence: 0.5
+
+uav_detection:
+  enabled: false  # 禁用无人机模型推理
+  max_y: 750
+  target_classes: ['uav', 'drone', 'plane']  # 模型类别名为空或在此列表中才作为无人机处理；列表为空则接受全部类别
+  max_det: 3
+  detect_interval_frames: 1
+
+camera_params:
+  exposure_time: 17000.0 # 曝光时间
+  gain: 17.9 # 增益值
+  # 多相机时填写目标相机序列号（与 MVS 枚举一致）；留空则默认使用枚举列表中的第一台（索引 0）
+  device_serial: 'DB0108949'
+
+blind_zone:
+  enabled: true  # 盲区预测开关
+  base_time: 3.0  # 基础预测时间
+  offset_time: 1.7  # 时间偏移量(根据上一帧的信道占用数动态调整单点预测时间)
+  direction_weight: 0.003  # 速度方向在候选点评分中的权重
+  distance_factor: 0.01  # 距离衰减系数，距离单位为米
+  min_speed_mps: 0.15  # 低于该速度时不使用方向分数
+  motion_history_size: 5  # 用最近多少个真实位置估计丢失前速度
+  motion_reset_gap_s: 1.0  # 真实观测间隔超过该值时清空旧速度窗口
+  lost_x_offset_cm: -30  # 目标从可识别变为丢失时，优先尝试最后坐标x方向偏移量(cm)
+  points:
+    # state=R 时仅使用 B* 点位；state=B 时仅使用 R* 点位。
+    # 坐标均为裁判系统场地坐标(cm)；1/2/7 保留原策略点，并合并 guess_pts.yaml 点位。
+    R1: [[1091, 1087], [1014, 375], [232, 200], [1108, 1195], [2262, 1341], [921, 904], [435, 1178]]
+    R2: [[890, 748], [235, 105], [200, 133], [1108, 1195], [921, 904], [913, 567]]
+    R3: [[232, 200], [1108, 1195], [2262, 1341], [921, 904], [435, 1178]]
+    R4: [[232, 200], [1108, 1195], [2262, 1341], [921, 904], [435, 1178]]
+    R7: [[670, 758], [401, 815], [232, 200], [1108, 1195], [2262, 1341], [921, 904], [435, 1178]]
+    B1: [[1706, 402], [1792, 1131], [2568, 1300], [1692, 305], [538, 159], [1879, 596], [2365, 322]]
+    B2: [[1906, 748], [2559, 1398], [2600, 1367], [1692, 305], [1879, 596], [1887, 933]]
+    B3: [[2568, 1300], [1692, 305], [538, 159], [1879, 596], [2365, 322]]
+    B4: [[2568, 1300], [1692, 305], [538, 159], [1879, 596], [2365, 322]]
+    B7: [[2126, 755], [2400, 671], [2568, 1300], [1692, 305], [538, 159], [1879, 596], [2365, 322]]
+
+double_vulnerability:
+  trigger_mode: 'both'  # 触发策略: 'distance'(仅距离), 'motion'(仅运动趋势), 'both'(两种都启用)
+  stable_duration_s: 2.0  # 距离/运动条件需持续满足该时长(秒)才视为触发
+  # 运行 main 主程序（加载 config 后）起 startup_limit_window_s 秒内，双倍易伤至多请求 startup_limit_max_uses 次；0 表示不限制
+  startup_limit_window_s: 120.0
+  startup_limit_max_uses: 1
+  distance:
+    threshold: 2.5  # 距离阈值(米)
+  motion:
+    close_distance: 3.0  # 近距离阈值(米)，小于此距离直接触发
+    far_distance: 6.0  # 远距离阈值(米)，大于此距离不触发
+    approach_speed: 0.5  # 接近速度阈值(m/s)，双方相对接近速度
+    active_speed: 0.5  # 主动移动速度阈值(m/s)，己方向敌方移动的速度
+    min_speed: 0.3  # 最小移动速度(m/s)，低于此速度认为无明显运动
+
+ui:
+  info_panel_size: [420, 500]  # 信息面板尺寸
+  map_display_size: [900, 480]  # 地图显示尺寸
+  img_display_size: [980, 700] # 画面显示尺寸
